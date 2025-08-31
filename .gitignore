@@ -1,0 +1,18 @@
+# Dependencies
+node_modules
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# WhatsApp Session Data
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Uploads
+uploads/
+
+# Logs
+*.log
+npm-debug.log*
