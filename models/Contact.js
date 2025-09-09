@@ -56,6 +56,14 @@ const contactSchema = new mongoose.Schema({
     _id: false
   }],
   stageHistory: [stageHistorySchema],
+  
+  // --- ✅ START: NEW FIELD ADDED ---
+  lastMessageTimestamp: {
+    type: Date,
+    index: true, // To optimize sorting by this field
+  },
+  // --- ✅ END: NEW FIELD ADDED ---
+
   isArchived: {
     type: Boolean,
     default: false,

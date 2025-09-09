@@ -26,13 +26,22 @@ const userSchema = new mongoose.Schema(
       enum: ["admin", "sales"], // 🎯 بس الاتنين دول مبدئياً
       default: "sales",
     },
-    // --- ✅ بداية الإضافة الجديدة ✅ ---
     isActive: {
       type: Boolean,
       default: true,
       index: true,
     },
-    // --- 🔚 نهاية الإضافة الجديدة 🔚 ---
+    
+    // --- ✅ START: NEW FIELDS ADDED ---
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
+    lastSeen: {
+      type: Date,
+    },
+    // --- ✅ END: NEW FIELDS ADDED ---
+
     tenantId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Tenant",

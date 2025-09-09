@@ -2,7 +2,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const Joi = require("joi");
 const User = require("../models/User");
-const Tenant = require("../models/Tenant"); // ✅ موديل الشركة
+const Tenant = require("../models/Tenant");
 const asyncHandler = require("../middlewares/asyncHandler");
 
 const registerSchema = Joi.object({
@@ -18,7 +18,6 @@ const loginSchema = Joi.object({
   password: Joi.string().required(),
 });
 
-// ✅ تعديل generateToken علشان يخزن tenantId كـ string مش object
 const generateToken = (user) =>
   jwt.sign(
     { 
@@ -30,7 +29,6 @@ const generateToken = (user) =>
     { expiresIn: "7d" }
   );
 
-// ⬇️ Register
 exports.register = asyncHandler(async (req, res) => {
   const data = await registerSchema.validateAsync(req.body);
 
@@ -52,7 +50,6 @@ exports.register = asyncHandler(async (req, res) => {
   });
 });
 
-// ⬇️ Login
 exports.login = asyncHandler(async (req, res) => {
   const { email, password } = await loginSchema.validateAsync(req.body);
 
@@ -82,12 +79,11 @@ exports.login = asyncHandler(async (req, res) => {
       email: user.email,
       role: user.role,
       tenantId: user.tenantId._id,
-      token: generateToken({ ...user.toObject(), tenantId: user.tenantId._id }), // 🟢 هنا بنمرر ID فقط
+      token: generateToken({ ...user.toObject(), tenantId: user.tenantId._id }),
     },
   });
 });
 
-// ⬇️ Get Profile
 exports.me = asyncHandler(async (req, res) => {
   if (!req.user?.id) return res.status(401).json({ ok: false, error: "Unauthorized" });
 
@@ -97,7 +93,6 @@ exports.me = asyncHandler(async (req, res) => {
   res.json({ ok: true, data: user });
 });
 
-// ⬇️ Reset Password
 exports.resetPassword = asyncHandler(async (req, res) => {
   if (req.user.role !== "admin" && req.user.role !== "super") {
     return res.status(403).json({ ok: false, error: "Forbidden" });
@@ -115,3 +110,48 @@ exports.resetPassword = asyncHandler(async (req, res) => {
 
   res.json({ ok: true, data: { message: "Password updated successfully" } });
 });
+
+exports.getTenantSettings = asyncHandler(async (req, res) => {
+    const tenant = await Tenant.findById(req.user.tenantId).select('settings');
+    if (!tenant) {
+        res.status(404);
+        throw new Error("Tenant not found");
+    }
+    res.json({ ok: true, data: tenant });
+});
+
+exports.updateTenantSettings = asyncHandler(async (req, res) => {
+    const { settings } = req.body;
+    
+    const tenant = await Tenant.findByIdAndUpdate(
+        req.user.tenantId,
+        { $set: { settings: settings } },
+        { new: true, runValidators: true }
+    ).select('settings');
+
+    if (!tenant) {
+        res.status(404);
+        throw new Error("Tenant not found");
+    }
+
+    res.json({ ok: true, data: tenant });
+});
+
+// --- ✅ START: NEW FUNCTION TO GET USERS ---
+/**
+ * @desc    Get users for the current tenant
+ * @route   GET /api/auth/users
+ * @access  Admin
+ */
+exports.getUsers = asyncHandler(async (req, res) => {
+    const filter = { tenantId: req.user.tenantId };
+    
+    // Allow filtering by role, e.g., /api/auth/users?role=sales
+    if (req.query.role) {
+        filter.role = req.query.role;
+    }
+
+    const users = await User.find(filter).select('-password'); // Exclude password from results
+    res.json({ ok: true, data: users });
+});
+// --- ✅ END: NEW FUNCTION TO GET USERS ---

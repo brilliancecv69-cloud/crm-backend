@@ -6,6 +6,10 @@ const Expense = require("../models/Expense");
 const asyncHandler = require("../middlewares/asyncHandler");
 const xlsx = require("xlsx");
 const logger = require("../utils/logger");
+// --- ✅ START: NEW MODEL IMPORTED ---
+const Message = require("../models/Message");
+// --- ✅ END: NEW MODEL IMPORTED ---
+
 
 const isValidObjectId = (id) => {
   try {
@@ -204,3 +208,73 @@ exports.exportReport = asyncHandler(async (req, res) => {
     res.status(500).json({ ok: false, error: "Failed to export report." });
   }
 });
+
+
+// --- ✅ START: NEW FUNCTION ADDED FOR SALES PERFORMANCE ---
+
+/**
+ * @desc    Get performance KPIs for a specific sales user
+ * @route   GET /api/reports/sales-performance/:userId
+ * @access  Admin
+ */
+exports.getSalesPerformanceKpis = asyncHandler(async (req, res) => {
+  const { tenantId } = req.user;
+  const { userId } = req.params;
+  const { from, to } = req.query;
+
+  if (!isValidObjectId(userId)) {
+    res.status(400);
+    throw new Error("Invalid user ID");
+  }
+
+  const filter = {
+    tenantId: new mongoose.Types.ObjectId(tenantId),
+    assignedTo: new mongoose.Types.ObjectId(userId),
+  };
+
+  // Add date range filtering if provided
+  const dateFilter = {};
+  if (from) dateFilter.$gte = new Date(from);
+  if (to) {
+    const endDate = new Date(to);
+    endDate.setHours(23, 59, 59, 999);
+    dateFilter.$lte = endDate;
+    filter.createdAt = dateFilter;
+  }
+  
+  const [
+    totalAssigned,
+    convertedToCustomer,
+    salesDeals,
+  ] = await Promise.all([
+    // Total leads/contacts ever assigned to this user within the date range
+    Contact.countDocuments(filter),
+    
+    // How many of those assigned contacts became 'customer' or 'sales'
+    Contact.countDocuments({ ...filter, stage: { $in: ['customer', 'sales'] } }),
+
+    // Detailed aggregation for sales deals
+    Contact.aggregate([
+      { $match: { ...filter, "salesData.pipeline_status": "won" } },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: "$salesData.amount" },
+          count: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
+
+  const salesDealData = salesDeals[0] || { totalAmount: 0, count: 0 };
+
+  const kpis = {
+    totalAssigned,
+    convertedToCustomer,
+    totalSalesDeals: salesDealData.count,
+    totalSalesAmount: salesDealData.totalAmount,
+  };
+
+  res.json({ ok: true, data: kpis });
+});
+// --- ✅ END: NEW FUNCTION ADDED ---

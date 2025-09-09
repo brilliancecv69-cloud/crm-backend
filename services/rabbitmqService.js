@@ -41,22 +41,24 @@ async function consumeIncomingMessages() {
     try {
       const data = JSON.parse(msg.content.toString());
       
-      // ✅✅✅ *** بداية التصحيح المطلوب *** ✅✅✅
-      // تم تعديل هذا الجزء ليكون أكثر مرونة ويقرأ المعرّف من المكان الصحيح
-      const { tenantId, from, to, direction, type, body, meta, createdAt } = data;
+      // --- ✅ START: CORRECTION ---
+      // Destructure 'type' with 'let' to allow modification, and others with 'const'.
+      const { tenantId, from, to, direction, body, meta, createdAt } = data;
+      let { type } = data;
+      // --- ✅ END: CORRECTION ---
+
       const waMessageId = data.waMessageId || meta?.waMessageId;
 
       if (!tenantId || !waMessageId) {
         logger.warn("[RabbitMQ] Message missing tenantId or waMessageId, skipping.", { data });
         return channel.ack(msg);
       }
-      // ✅✅✅ *** بداية التصحيح المطلوب *** ✅✅✅
-      // If the message type from WhatsApp is 'chat', we convert it to 'text'
-      // to match our database schema.
+      
+      // Now this reassignment is valid because 'type' was declared with 'let'.
       if (type === 'chat') {
         type = 'text';
       }
-      // ✅✅✅ *** نهاية التصحيح المطلوب *** ✅✅✅
+
       const contactPhone = (direction === 'out' ? to : from).replace('@c.us', '');
       const contact = await Contact.findOneAndUpdate(
         { phone: contactPhone, tenantId },

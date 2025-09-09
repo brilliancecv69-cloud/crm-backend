@@ -22,15 +22,43 @@ const tenantSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      // --- ✅ START: NEW FIELDS ADDED ---
+      price: {
+        type: Number,
+        default: 0,
+      }, // سعر الاشتراك
+      paidAmount: {
+        type: Number,
+        default: 0,
+      }, // المبلغ المدفوع
+      // --- ✅ END: NEW FIELDS ADDED ---
     },
 
     settings: {
-      // ⭐️ تمت إضافة هذا الحقل لدعم توزيع العملاء بشكل صحيح
+      leadDistributionStrategy: {
+        type: String,
+        enum: ['manual', 'round-robin'],
+        default: 'manual',
+      },
       leadCounter: { type: Number, default: 0 },
-      // ... يمكن إضافة أي إعدادات أخرى هنا
     },
   },
-  { timestamps: true }
+  { 
+    timestamps: true,
+    // To include virtuals in the output
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
+
+// --- ✅ START: NEW VIRTUAL PROPERTY ---
+// حقل افتراضي لحساب المبلغ المتبقي تلقائياً
+tenantSchema.virtual('subscription.remainingAmount').get(function() {
+  if (this.subscription && typeof this.subscription.price === 'number' && typeof this.subscription.paidAmount === 'number') {
+    return this.subscription.price - this.subscription.paidAmount;
+  }
+  return 0; // Or null, depending on how you want to handle it
+});
+// --- ✅ END: NEW VIRTUAL PROPERTY ---
 
 module.exports = mongoose.model("Tenant", tenantSchema);

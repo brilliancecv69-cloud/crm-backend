@@ -5,6 +5,10 @@ const User = require("../models/User");
 const Notification = require("../models/Notification");
 const Tenant = require("../models/Tenant");
 const asyncHandler = require("../middlewares/asyncHandler");
+// --- ✅ START: NEW MODEL IMPORTED ---
+const ActiveFollowUp = require("../models/ActiveFollowUp");
+// --- ✅ END: NEW MODEL IMPORTED ---
+
 
 // Schemas for validation
 const contactUpsertSchema = Joi.object({
@@ -15,7 +19,6 @@ const contactUpsertSchema = Joi.object({
   notes: Joi.string().trim().allow("").optional(),
 });
 
-// --- ✅ START: UPDATED VALIDATION SCHEMA ---
 const contactUpdateSchema = Joi.object({
     name: Joi.string().trim().allow(""),
     email: Joi.string().email({ tlds: { allow: false } }).allow(""),
@@ -25,8 +28,6 @@ const contactUpdateSchema = Joi.object({
         pipeline_status: Joi.string(),
         amount: Joi.number(),
         probability: Joi.number(),
-        
-        // This is the new part that allows shipping details
         shippingDetails: Joi.object({
             company: Joi.string().hex().length(24).allow(null, ''),
             trackingNumber: Joi.string().trim().allow(null, ''),
@@ -45,7 +46,6 @@ const contactUpdateSchema = Joi.object({
         price: Joi.number().min(0).required(),
     })),
 }).min(1);
-// --- ✅ END: UPDATED VALIDATION SCHEMA ---
 
 const stageSchema = Joi.object({
     stage: Joi.string().valid('lead', 'customer', 'sales').required(),
@@ -145,7 +145,7 @@ exports.getOne = asyncHandler(async (req, res) => {
 exports.list = asyncHandler(async (req, res) => {
     const {
       stage, q, pipeline_status, isArchived,
-      page = 1, limit = 20, sortBy = "updatedAt", order = "desc",
+      page = 1, limit = 20, sortBy, order = "desc",
       from, to
     } = req.query;
 
@@ -180,7 +180,13 @@ exports.list = asyncHandler(async (req, res) => {
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const sort = { [sortBy]: order === "asc" ? 1 : -1 };
+    
+    let sort;
+    if (sortBy) {
+        sort = { [sortBy]: order === "asc" ? 1 : -1 };
+    } else {
+        sort = { lastMessageTimestamp: -1, updatedAt: -1 };
+    }
 
     const [items, total] = await Promise.all([
       Contact.find(filter)
@@ -189,6 +195,21 @@ exports.list = asyncHandler(async (req, res) => {
         .sort(sort).skip(skip).limit(parseInt(limit)).lean(),
       Contact.countDocuments(filter),
     ]);
+    
+    // --- ✅ START: NEW LOGIC TO ADD FOLLOW-UP STATUS ---
+    if (items.length > 0) {
+        const contactIds = items.map(c => c._id);
+        const activeFollowUps = await ActiveFollowUp.find({ contactId: { $in: contactIds } }).select('contactId').lean();
+        const followUpSet = new Set(activeFollowUps.map(f => f.contactId.toString()));
+        
+        const itemsWithStatus = items.map(item => ({
+            ...item,
+            hasActiveFollowUp: followUpSet.has(item._id.toString())
+        }));
+
+        return res.json({ ok: true, data: { items: itemsWithStatus, total, page: parseInt(page), limit: parseInt(limit) } });
+    }
+    // --- ✅ END: NEW LOGIC ---
 
     res.json({ ok: true, data: { items, total, page: parseInt(page), limit: parseInt(limit) } });
 });
@@ -206,8 +227,6 @@ exports.update = asyncHandler(async (req, res) => {
         throw new Error("Contact not found");
     }
 
-    // --- ✅ START: IMPROVED MERGE LOGIC ---
-    // Safely merge nested salesData and shippingDetails to prevent data loss
     if (validatedData.salesData) {
         const existingSalesData = contact.salesData ? contact.salesData.toObject() : {};
         const newShippingDetails = validatedData.salesData.shippingDetails
@@ -220,7 +239,6 @@ exports.update = asyncHandler(async (req, res) => {
             shippingDetails: newShippingDetails
         };
     }
-    // --- ✅ END: IMPROVED MERGE LOGIC ---
 
     Object.assign(contact, validatedData);
     await contact.save();

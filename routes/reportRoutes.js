@@ -14,4 +14,9 @@ router.use(requireRole("admin"));
 router.get("/detailed", ctrl.getDetailedReport);
 router.get("/export", ctrl.exportReport);
 
+// --- ✅ START: NEW ROUTE ADDED ---
+router.get("/sales-performance/:userId", ctrl.getSalesPerformanceKpis);
+// --- ✅ END: NEW ROUTE ADDED ---
+
+
 module.exports = router;

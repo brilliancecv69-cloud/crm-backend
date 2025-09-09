@@ -1,9 +1,10 @@
 const Joi = require("joi");
-const Lead = require("../models/Lead");
+const Contact = require("../models/Contact");
 const Message = require("../models/Message");
+const User = require("../models/User");
 const asyncHandler = require("../middlewares/asyncHandler");
 
-// نسمح لـ lastContacted، ونشيل whatsappFirstSeen لو اتبعت
+// ✅ Schema
 const leadCreateSchema = Joi.object({
   phone: Joi.string().trim().required(),
   name: Joi.string().trim().optional().allow("").allow(null),
@@ -12,22 +13,20 @@ const leadCreateSchema = Joi.object({
   notes: Joi.string().trim().optional().allow("").allow(null),
   status: Joi.string().trim().optional().allow("").allow(null).default("lead"),
   last_message: Joi.string().trim().optional().allow("").allow(null),
-
-  // يدوي
   lastContacted: Joi.alternatives().try(Joi.date(), Joi.string().trim(), Joi.valid(null, "")).optional(),
-
-  // يتسجل تلقائي من السيرفر → نشيله لو اتبعت
-  whatsappFirstSeen: Joi.any().strip().optional(),
+  whatsappFirstSeen: Joi.any().strip().optional(), // هيتم تجاهلها
 });
 
-// helper: parse date strings safely
+// ✅ Helper: parse safe date
 function toDateOrNull(v) {
   if (v === "" || v == null) return null;
   const d = (v instanceof Date) ? v : new Date(v);
   return isNaN(d.getTime()) ? null : d;
 }
 
-// ✅ List (يدعم clientId=null للتوافق الرجعي)
+/* =====================================================
+   LIST
+===================================================== */
 exports.list = asyncHandler(async (req, res) => {
   const { page = 1, pageSize = 20, phone = "", date = "" } = req.query;
 
@@ -45,30 +44,35 @@ exports.list = asyncHandler(async (req, res) => {
   }
 
   const [items, total] = await Promise.all([
-    Lead.find(q).sort({ last_seen: -1 }).skip((page - 1) * pageSize).limit(Number(pageSize)).lean(),
-    Lead.countDocuments(q),
+    Contact.find(q).sort({ last_seen: -1 }).skip((page - 1) * pageSize).limit(Number(pageSize)).lean(),
+    Contact.countDocuments(q),
   ]);
 
   res.json({ items, total, page: Number(page), pageSize: Number(pageSize) });
 });
 
-// ✅ Get one (يسمح بالسجلات القديمة)
+/* =====================================================
+   GET ONE
+===================================================== */
 exports.getOne = asyncHandler(async (req, res) => {
   const clientId = req.user?.clientId || null;
   const q = { _id: req.params.id };
   if (clientId) q.$or = [{ clientId }, { clientId: null }];
-  const lead = await Lead.findOne(q);
+
+  const lead = await Contact.findOne(q);
   if (!lead) return res.status(404).json({ error: "Lead not found" });
   res.json(lead);
 });
 
-// ✅ Create/Upsert (idempotent) — whatsappFirstSeen يتحدد تلقائيًا أول مرة فقط
+/* =====================================================
+   CREATE / UPSERT
+===================================================== */
 exports.create = asyncHandler(async (req, res) => {
   const data = await leadCreateSchema.validateAsync(req.body);
   const clientId = req.user?.clientId || null;
+  const now = new Date();
 
   const filter = { phone: data.phone, clientId: clientId || null };
-  const now = new Date();
 
   const setOnInsert = {
     clientId,
@@ -79,9 +83,7 @@ exports.create = asyncHandler(async (req, res) => {
     notes: data.notes ?? "",
     status: data.status ?? "lead",
     last_seen: now,
-    // 👇 أول تسجيل فقط من السيرفر
     whatsappFirstSeen: now,
-    // يدوي (لو اتبعت قيمة صحيحة نخزنها، وإلا null)
     lastContacted: toDateOrNull(data.lastContacted),
   };
 
@@ -93,11 +95,10 @@ exports.create = asyncHandler(async (req, res) => {
     ...(data.status ? { status: data.status } : {}),
     ...(data.last_message != null ? { last_message: data.last_message } : {}),
     ...(data.lastContacted !== undefined ? { lastContacted: toDateOrNull(data.lastContacted) } : {}),
-    last_seen: now, // سيستم
-    // ❌ لا نحدث whatsappFirstSeen هنا إطلاقًا (أول مرة فقط عبر setOnInsert)
+    last_seen: now,
   };
 
-  const lead = await Lead.findOneAndUpdate(
+  const lead = await Contact.findOneAndUpdate(
     filter,
     { $setOnInsert: setOnInsert, $set: set },
     { upsert: true, new: true }
@@ -106,7 +107,9 @@ exports.create = asyncHandler(async (req, res) => {
   res.status(201).json(lead);
 });
 
-// ✅ Update — تجاهل whatsappFirstSeen (عرض فقط)، lastContacted يدوي
+/* =====================================================
+   UPDATE
+===================================================== */
 exports.update = asyncHandler(async (req, res) => {
   const data = await leadCreateSchema.fork(["phone"], (s) => s.optional()).validateAsync(req.body);
 
@@ -114,33 +117,81 @@ exports.update = asyncHandler(async (req, res) => {
   const q = { _id: req.params.id };
   if (clientId) q.$or = [{ clientId }, { clientId: null }];
 
-  const patch = {
-    ...data,
-  };
-
+  const patch = { ...data };
   if (data.lastContacted !== undefined) patch.lastContacted = toDateOrNull(data.lastContacted);
-  // ❌ whatsappFirstSeen اتشال بالفعل بالـ strip()، فلن يُحدث من العميل
 
-  const lead = await Lead.findOneAndUpdate(q, patch, { new: true });
+  const lead = await Contact.findOneAndUpdate(q, patch, { new: true });
   if (!lead) return res.status(404).json({ error: "Lead not found" });
   res.json(lead);
 });
 
-// ✅ Remove
+/* =====================================================
+   REMOVE
+===================================================== */
 exports.remove = asyncHandler(async (req, res) => {
   const clientId = req.user?.clientId || null;
   const q = { _id: req.params.id };
   if (clientId) q.$or = [{ clientId }, { clientId: null }];
 
-  const lead = await Lead.findOneAndDelete(q);
+  const lead = await Contact.findOneAndDelete(q);
   if (!lead) return res.status(404).json({ error: "Lead not found" });
+
   await Message.deleteMany({ lead_id: req.params.id });
+
   res.json({ message: "Lead deleted" });
 });
 
-// ✅ Messages
+/* =====================================================
+   MESSAGES
+===================================================== */
 exports.messages = asyncHandler(async (req, res) => {
   const leadId = req.params.leadId;
   const msgs = await Message.find({ lead_id: leadId }).sort({ timestamp: 1 });
   res.json(msgs);
+});
+
+/* =====================================================
+   ASSIGN BULK LEADS
+===================================================== */
+exports.assignLeadsBulk = asyncHandler(async (req, res) => {
+  console.log("Assign Bulk Request Body:", req.body);
+
+  const { leadIds, salesId } = req.body;
+  const clientId = req.user?.clientId || null;
+
+  if (!leadIds || !salesId || !Array.isArray(leadIds) || leadIds.length === 0) {
+    return res.status(400).json({ error: "Please provide leadIds (array) and a salesId" });
+  }
+
+  const salesUser = await User.findOne({ _id: salesId, role: "sales" });
+  if (!salesUser) {
+    return res.status(404).json({ error: "Sales user not found or is not a sales representative" });
+  }
+
+  const filter = { _id: { $in: leadIds } };
+  if (clientId) {
+    filter.$or = [{ clientId }, { clientId: null }];
+  }
+
+  const updateResult = await Contact.updateMany(filter, {
+    $set: { assignedTo: salesId, status: "Assigned" },
+  });
+
+  console.log("Update Result:", updateResult);
+
+  if (updateResult.matchedCount === 0) {
+    return res.status(404).json({ error: "No leads found with provided IDs." });
+  }
+
+  if (updateResult.modifiedCount === 0) {
+    return res.status(200).json({
+      message: `Leads were already assigned to ${salesUser.name}. No changes made.`,
+      count: 0,
+    });
+  }
+
+  res.status(200).json({
+    message: `${updateResult.modifiedCount} leads successfully assigned to ${salesUser.name}.`,
+    count: updateResult.modifiedCount,
+  });
 });

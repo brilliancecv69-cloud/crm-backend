@@ -1,9 +1,13 @@
 const router = require("express").Router();
 const ctrl = require("../controllers/contactController");
 const auth = require("../middlewares/auth");
+const requireRole = require("../middlewares/requireRole");
 const upload = require("../middlewares/upload");
 const xlsx = require("xlsx");
 const Contact = require("../models/Contact");
+// --- ✅ START: NEW CONTROLLER IMPORTED ---
+const followUpCtrl = require("../controllers/followUpController");
+// --- ✅ END: NEW CONTROLLER IMPORTED ---
 
 router.use(auth);
 
@@ -95,14 +99,11 @@ router.post("/import", upload.single("file"), async (req, res) => {
 // --- ✅ FINAL FIX START ---
 
 // 📌 Update contact
-// The problematic line has been removed from this route handler.
 router.patch("/:id", (req, res, next) => {
-  // The line "req.body.tenantId = req.user.tenantId;" was here and has been correctly deleted.
   ctrl.update(req, res, next);
 });
 
 // 📌 Change stage
-// The problematic line has also been removed from this route handler.
 router.patch("/:id/stage", (req, res, next) => {
   ctrl.changeStage(req, res, next);
 });
@@ -111,9 +112,28 @@ router.patch("/:id/stage", (req, res, next) => {
 
 
 // 📌 Delete contact
-router.delete("/:id", (req, res, next) => {
+router.delete("/:id", requireRole('admin'), (req, res, next) => {
   req.query.tenantId = req.user.tenantId;
   ctrl.delete(req, res, next);
 });
+
+// --- ✅ START: NEW FOLLOW-UP ROUTES ---
+
+/**
+ * @route   POST /api/contacts/:contactId/follow-up/start
+ * @desc    Starts an automated follow-up sequence for a contact
+ * @access  Private (Admin, Sales)
+ */
+router.post("/:contactId/follow-up/start", followUpCtrl.startFollowUp);
+
+/**
+ * @route   DELETE /api/contacts/:contactId/follow-up/stop
+ * @desc    Stops an automated follow-up sequence for a contact
+ * @access  Private (Admin, Sales)
+ */
+router.delete("/:contactId/follow-up/stop", followUpCtrl.stopFollowUp);
+
+// --- ✅ END: NEW FOLLOW-UP ROUTES ---
+
 
 module.exports = router;
