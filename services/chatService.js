@@ -8,7 +8,7 @@ const Contact = require("../models/Contact");
 const Tenant = require("../models/Tenant");
 const User = require("../models/User");
 const ActiveFollowUp = require("../models/ActiveFollowUp");
-const Notification = require("../models/Notification"); // <-- ✅ FIX: Used consistently
+const Notification = require("../models/Notification");
 
 const UPLOADS_DIR = path.join(__dirname, "../../uploads");
 if (!fs.existsSync(UPLOADS_DIR)) {
@@ -25,8 +25,15 @@ class ChatService {
     this.clients.set(tenantId, client);
     logger.info(`[ChatService] WhatsApp client registered for tenant ${tenantId}`);
   }
-  
-  // --- ✅ REFACTORED FOR ATOMICITY (Prevents Race Condition) ---
+
+  unregisterClient(tenantId) {
+    if (this.clients.has(tenantId)) {
+      this.clients.delete(tenantId);
+      logger.warn(`[ChatService] WhatsApp client unregistered for tenant ${tenantId}.`);
+    }
+  }
+
+  // ... (دالة assignLeadRoundRobin تبقى كما هي)
   async assignLeadRoundRobin(tenantId, contact) {
     try {
       const salesUsers = await User.find({
@@ -37,15 +44,14 @@ class ChatService {
 
       if (salesUsers.length === 0) {
         logger.warn(`[ChatService] No active sales users found for tenant ${tenantId} to assign lead.`);
-        await contact.save(); // Save contact without assignment
+        await contact.save();
         return;
       }
       
-      // Atomic operation to get the counter and increment it in one step
       const updatedTenant = await Tenant.findByIdAndUpdate(
         tenantId,
         { $inc: { 'settings.leadCounter': 1 } },
-        { new: false } // We want the value *before* incrementing
+        { new: false }
       );
 
       const userIndex = (updatedTenant.settings.leadCounter || 0) % salesUsers.length;
@@ -60,11 +66,11 @@ class ChatService {
 
     } catch (error) {
       logger.error(`[ChatService] Error in round-robin assignment for tenant ${tenantId}`, { error: error.message });
-      // Save contact anyway if assignment fails
       if (!contact.isNew) await contact.save();
     }
   }
 
+  // ... (دالة processAndBroadcastMessage تبقى كما هي)
   async processAndBroadcastMessage(msg, tenantId) {
     if (!msg || !msg.id?.id) {
       logger.warn("[ChatService] Ignoring message with invalid ID.", { msg });
@@ -73,7 +79,6 @@ class ChatService {
 
     try {
       const existingMessage = await Message.findOne({ tenantId, "meta.waMessageId": msg.id.id });
-      // Handle simple ACK updates for media messages without reprocessing everything
       if (existingMessage && existingMessage.meta?.mediaUrl && !msg.hasMedia) {
         existingMessage.meta.ack = msg.ack;
         await existingMessage.save();
@@ -84,13 +89,13 @@ class ChatService {
       const messageTimestamp = new Date(msg.timestamp * 1000);
       const contact = await this._handleContactLogic(msg, tenantId, messageTimestamp);
       
-      if (!contact) return; // Stop if contact logic fails
+      if (!contact) return;
 
       const normalizedMsg = {
         tenantId,
         contactId: contact._id,
         direction: msg.fromMe ? "out" : "in",
-        type: 'text', // Default type
+        type: 'text',
         body: msg.body || "",
         createdAt: messageTimestamp,
         meta: { waMessageId: msg.id.id, ack: msg.ack, hasMedia: msg.hasMedia },
@@ -113,8 +118,8 @@ class ChatService {
       logger.error(`[ChatService] Error processing message ${msg.id?.id}`, { error: err.message, stack: err.stack });
     }
   }
-
-  // --- ✅ START: NEW HELPER FUNCTIONS FOR REFACTORING ---
+  
+  // ... (دالة _handleContactLogic تبقى كما هي)
   async _handleContactLogic(msg, tenantId, messageTimestamp) {
     const rawPhone = msg.fromMe ? msg.to : msg.from;
     const phone = rawPhone.replace("@c.us", "");
@@ -128,7 +133,7 @@ class ChatService {
     
     contact.lastMessageTimestamp = messageTimestamp;
     
-    if (msg.direction === "in") { // Check direction from normalized message logic
+    if (!msg.fromMe) {
       await this._handleIncomingReply(contact);
 
       if (isNewContact) {
@@ -139,7 +144,6 @@ class ChatService {
           await contact.save();
         }
       } else {
-        // Notify assigned user of new reply
         if (contact.assignedTo) {
           const notificationPayload = {
             contactName: contact.name,
@@ -151,13 +155,14 @@ class ChatService {
         }
         await contact.save();
       }
-    } else { // Outgoing message
+    } else {
       await contact.save();
     }
     
     return contact;
   }
-
+  
+  // ... (دالة _handleIncomingReply تبقى كما هي)
   async _handleIncomingReply(contact) {
     const stoppedFollowUp = await ActiveFollowUp.findOneAndDelete({ contactId: contact._id });
     if (stoppedFollowUp) {
@@ -167,7 +172,6 @@ class ChatService {
         text: `Automated follow-up for "${contact.name}" was stopped because they replied.`,
         link: `/contacts/${contact._id}`
       };
-      // --- ✅ FIX: Use imported Notification model ---
       const notification = await Notification.create(notificationPayload);
       this.io.to(`user:${stoppedFollowUp.startedBy}`).emit("new_notification", notification);
     }
@@ -182,9 +186,12 @@ class ChatService {
       const uniqueName = `${Date.now()}-${media.filename || Math.round(Math.random() * 1e9)}.${extension}`;
       const filePath = path.join(UPLOADS_DIR, uniqueName);
       fs.writeFileSync(filePath, Buffer.from(media.data, "base64"));
-
+      
+      // ✅ --- بداية التعديل --- ✅
       const host = process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 5000}`;
-      const fileUrl = `${host}/uploads/${uniqueName}`;
+      const secureHost = host.replace(/^http:/, 'https');
+      const fileUrl = `${secureHost}/uploads/${uniqueName}`; // ✅ استخدام الرابط الآمن
+      // ✅ --- نهاية التعديل --- ✅
 
       normalizedMsg.meta.mediaUrl = fileUrl;
       normalizedMsg.meta.mediaType = media.mimetype;
@@ -196,17 +203,26 @@ class ChatService {
       logger.error(`[ChatService] Media download failed for msg ${msg.id?.id}`, { error: err.message });
     }
   }
-  // --- ✅ END: NEW HELPER FUNCTIONS ---
-
-
+  
   async handleIncomingMessage(msg, tenantId) {
-    msg.direction = 'in'; // Add direction property for easier logic handling
     await this.processAndBroadcastMessage(msg, tenantId);
   }
 
+  // ... (دالة handleOutgoingMessage تبقى كما هي)
   async handleOutgoingMessage(tenantId, contactId, body, mediaInfo = null) {
+    logger.info(`[ChatService] Attempting to send message for tenant ${tenantId}.`);
     const client = this.clients.get(tenantId);
-    if (!client || (await client.getState()) !== "CONNECTED") {
+
+    if (!client) {
+      logger.error(`[ChatService] SEND_FAIL: Client object not found in chatService's map for tenant ${tenantId}.`);
+      throw new Error(`WhatsApp client for tenant ${tenantId} is not connected.`);
+    }
+
+    const clientState = await client.getState();
+    logger.info(`[ChatService] Client state for tenant ${tenantId} is: ${clientState}`);
+
+    if (clientState !== "CONNECTED") {
+      logger.error(`[ChatService] SEND_FAIL: Client state is '${clientState}', not 'CONNECTED'.`);
       throw new Error(`WhatsApp client for tenant ${tenantId} is not connected.`);
     }
 

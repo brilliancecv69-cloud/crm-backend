@@ -5,11 +5,11 @@ const User = require("../models/User");
 const WhatsAppAccount = require("../models/WhatsAppAccount");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { superAuth } = require("../middlewares/superAuth");
-const { login } = require("../controllers/superController");
+const superController = require("../controllers/superController");
+const { getManager } = require("../listener"); // <-- استيراد مدير الجلسات
 
 // --- 🔑 LOGIN ---
-router.post("/login", login);
-
+router.post("/login", superController.login);
 
 // --- 📈 DASHBOARD & STATS ---
 router.get("/stats", superAuth, asyncHandler(async (req, res) => {
@@ -57,13 +57,38 @@ router.get("/tenants/:id", superAuth, asyncHandler(async (req, res) => {
     });
 }));
 
+// --- 🚀 CREATE TENANT (MODIFIED) ---
 router.post("/tenants", superAuth, asyncHandler(async (req, res) => {
     const { name, slug, adminEmail, adminPassword } = req.body;
     if (!name || !slug || !adminEmail || !adminPassword) {
       return res.status(400).json({ ok: false, error: "Missing required fields" });
     }
+
+    // الخطوة 1: إنشاء الشركة والمستخدم
     const tenant = await Tenant.create({ name, slug });
-    await User.create({ name: "Admin", email: adminEmail, password: adminPassword, role: "admin", tenantId: tenant._id });
+    await User.create({ 
+        name: "Admin", 
+        email: adminEmail, 
+        password: adminPassword, 
+        role: "admin", 
+        tenantId: tenant._id 
+    });
+
+    // الخطوة 2: إنشاء سجل حساب الواتساب
+    await WhatsAppAccount.create({
+        tenantId: tenant._id,
+        sessionName: `tenant-${slug}` // اسم فريد للجلسة
+    });
+
+    // الخطوة 3: إعطاء أمر ببدء الجلسة فوراً
+    const manager = getManager();
+    if (manager) {
+        manager.startClient(tenant._id.toString());
+    } else {
+        console.error("WhatsApp Manager is not available.");
+        // يمكنك هنا إضافة منطق للتعامل مع الحالة التي يكون فيها المدير غير متاح
+    }
+    
     res.status(201).json({ ok: true, data: tenant });
 }));
 
@@ -92,7 +117,6 @@ router.delete("/tenants/:id", superAuth, asyncHandler(async (req, res) => {
 
 
 // --- 👥 USER MANAGEMENT (API FIX) ---
-// ✅ This is the corrected, simplified route that will fix the "pending" issue.
 router.get("/users", superAuth, asyncHandler(async (req, res) => {
     const users = await User.find().populate("tenantId", "name slug").lean();
     res.json({ ok: true, data: users });

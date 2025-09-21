@@ -8,7 +8,6 @@ const path = require("path");
 const fs = require("fs");
 const ffmpeg = require("fluent-ffmpeg");
 
-// 🟢 نجيب المسار من ENV الأول، ولو مش موجود نستخدم الباكدج
 const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
 const ffmpegPath = process.env.FFMPEG_PATH || ffmpegInstaller.path;
 
@@ -17,11 +16,9 @@ console.log("✅ Using ffmpeg binary at:", ffmpegPath);
 
 router.use(auth);
 
-// --- Endpoints الأساسية للرسائل ---
 router.get("/", ctrl.getMessages);
 router.post("/", ctrl.addMessage);
 
-// --- إعداد مجلد الرفع ---
 const uploadDir = path.join(__dirname, "../../uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -40,51 +37,50 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// --- Endpoint رفع الملفات مع دعم تحويل webm → ogg ---
 router.post("/upload", upload.single("file"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ ok: false, error: "No file uploaded" });
   }
 
+  // ✅ --- بداية التعديل --- ✅
+  // استخدام متغير بيئة الإنتاج أو بناء الرابط الآمن يدوياً
+  const host = process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+  const secureHost = host.replace(/^http:/, 'https');
+  // ✅ --- نهاية التعديل --- ✅
+
   let finalPath = req.file.path;
-  let finalUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+  let finalUrl = `${secureHost}/uploads/${req.file.filename}`; // ✅ استخدام الرابط الآمن
   let finalFileName = req.file.originalname;
   let finalType = req.file.mimetype;
 
   try {
-    // 🟢 لو الملف صوت webm → نحوله ogg (opus)
     if (req.file.mimetype === "audio/webm") {
       const oggName = req.file.filename.replace(/\.webm$/, "") + ".ogg";
       const oggPath = path.join(uploadDir, oggName);
 
       await new Promise((resolve, reject) => {
-  ffmpeg({ source: req.file.path, logger: console })   // 🟢 source صريح
-    .setFfmpegPath(ffmpegPath)                        // 🟢 نتأكد بنمرره
-    .audioCodec("libopus")
-    .format("ogg")
-    .save(oggPath)
-    .on("end", resolve)
-    .on("error", reject);
-});
+        ffmpeg({ source: req.file.path, logger: console })
+          .setFfmpegPath(ffmpegPath)
+          .audioCodec("libopus")
+          .format("ogg")
+          .save(oggPath)
+          .on("end", resolve)
+          .on("error", reject);
+      });
 
+      finalPath = oggPath;
+      finalUrl = `${secureHost}/uploads/${oggName}`; // ✅ استخدام الرابط الآمن هنا أيضاً
+      finalFileName = oggName;
+      finalType = "audio/ogg; codecs=opus";
 
-      /// استخدم ملف OGG الجديد
-finalPath = oggPath;
-finalUrl = `${req.protocol}://${req.get("host")}/uploads/${oggName}`;
-finalFileName = oggName;
-// ✅ نخلي الـ mediaType أوضح ومتوافق مع واتساب والـ <audio>
-finalType = "audio/ogg; codecs=opus";
-
-
-      // 🗑️ امسح النسخة القديمة webm
       fs.unlinkSync(req.file.path);
     }
 
     res.json({
       ok: true,
       data: {
-        url: finalUrl,       // رابط الميديا للعرض في الواجهة
-        path: finalPath,     // المسار الداخلي للباك اند (مهم للإرسال)
+        url: finalUrl,
+        path: finalPath,
         fileName: finalFileName,
         mediaType: finalType,
       },

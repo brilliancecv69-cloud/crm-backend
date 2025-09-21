@@ -13,7 +13,7 @@ function generateTokenSuper(payload) {
 }
 
 // 🔑 Super Admin login
-exports.login = async (req, res) => {
+const login = async (req, res) => {
   const { email, password } = req.body;
   if (email !== SUPER_EMAIL || password !== SUPER_PASS) {
     return res.status(401).json({ ok: false, error: "Invalid super credentials" });
@@ -23,12 +23,12 @@ exports.login = async (req, res) => {
 };
 
 // 🏢 Tenants
-exports.listTenants = async (req, res) => {
+const listTenants = async (req, res) => {
   const tenants = await Tenant.find().sort({ createdAt: -1 });
   res.json({ ok: true, data: tenants });
 };
 
-exports.createTenant = async (req, res) => {
+const createTenant = async (req, res) => {
   try {
     const { name, slug } = req.body;
     const tenant = await Tenant.create({ name, slug });
@@ -39,26 +39,21 @@ exports.createTenant = async (req, res) => {
 };
 
 // 👥 Users
-exports.listUsers = async (req, res) => {
+const listUsers = async (req, res) => {
   const users = await User.find().populate("tenantId", "name");
   res.json({ ok: true, data: users });
 };
 
-// superController.js
-
-exports.createUser = async (req, res) => {
+const createUser = async (req, res) => {
   try {
     const { name, email, password, role, tenantId } = req.body;
-
-    // سيب الـ pre-save hook يـhash
     const user = await User.create({
       name,
       email,
-      password, // مش متـhash هنا
+      password,
       role,
       tenantId,
     });
-
     res.status(201).json({
       ok: true,
       data: {
@@ -74,3 +69,13 @@ exports.createUser = async (req, res) => {
   }
 };
 
+
+// ✨ --- التعديل الوحيد هنا --- ✨
+// نقوم بتصدير كل الدوال في كائن واحد لضمان عدم حدوث أي التباس
+module.exports = {
+    login,
+    listTenants,
+    createTenant,
+    listUsers,
+    createUser
+};

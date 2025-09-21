@@ -78,7 +78,7 @@ exports.getTemplate = asyncHandler(async (req, res) => {
 /**
  * @desc    Update a follow-up template
  * @route   PUT /api/follow-up-templates/:id
- * @access  Admin, Sales (owner)
+ * @access  Admin, Sales (owner or admin)
  */
 exports.updateTemplate = asyncHandler(async (req, res) => {
   const validatedData = await templateSchema.validateAsync(req.body);
@@ -91,8 +91,13 @@ exports.updateTemplate = asyncHandler(async (req, res) => {
     throw new Error("Template not found");
   }
 
-  // A user can only update a template if they created it.
-  if (String(template.createdBy) !== userId) {
+  // Debug logs
+  console.log("Update attempt → template.createdBy:", String(template.createdBy));
+  console.log("Update attempt → userId:", userId);
+  console.log("Update attempt → role:", role);
+
+  // Allow if owner OR admin
+  if (String(template.createdBy) !== userId && role !== "admin") {
     res.status(403);
     throw new Error("You are not authorized to update this template");
   }
@@ -107,7 +112,7 @@ exports.updateTemplate = asyncHandler(async (req, res) => {
 /**
  * @desc    Delete a follow-up template
  * @route   DELETE /api/follow-up-templates/:id
- * @access  Admin, Sales (owner)
+ * @access  Admin, Sales (owner or admin)
  */
 exports.deleteTemplate = asyncHandler(async (req, res) => {
   const { tenantId, id: userId, role } = req.user;
@@ -119,8 +124,13 @@ exports.deleteTemplate = asyncHandler(async (req, res) => {
     throw new Error("Template not found");
   }
 
-  // A user can only delete a template if they created it.
-  if (String(template.createdBy) !== userId) {
+  // Debug logs to check IDs
+  console.log("Delete attempt → template.createdBy:", String(template.createdBy));
+  console.log("Delete attempt → userId:", userId);
+  console.log("Delete attempt → role:", role);
+
+  // Allow if owner OR admin
+  if (String(template.createdBy) !== userId && role !== "admin") {
     res.status(403);
     throw new Error("You are not authorized to delete this template");
   }

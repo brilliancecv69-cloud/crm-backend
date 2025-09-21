@@ -22,7 +22,7 @@ const updateProductSchema = Joi.object({
   stockQty: Joi.number().integer().min(0),
   minQty: Joi.number().integer().min(0),
   notes: Joi.string().trim().allow(""),
-}).min(1); // يجب وجود حقل واحد على الأقل للتحديث
+}).min(1);
 
 // ⭐️ Schema لتعديل المخزون
 const adjustStockSchema = Joi.object({
@@ -43,7 +43,6 @@ exports.getProducts = asyncHandler(async (req, res) => {
 
   if (category) filter.category = category;
   
-  // ⭐️ تم تحسين منطق lowStock ليعمل بشكل صحيح مع Mongoose
   if (lowStock === 'true') {
     filter.$expr = { $lte: ["$stockQty", "$minQty"] };
   }
@@ -92,17 +91,24 @@ exports.adjustStock = asyncHandler(async (req, res) => {
   const product = await Product.findOne({ _id: req.params.id, tenantId: req.user.tenantId });
   if (!product) return res.status(404).json({ ok: false, error: "Product not found" });
 
-  // نستخدم $inc لضمان التحديث بشكل آمن (atomic)
   const updatedProduct = await Product.findByIdAndUpdate(
     req.params.id,
     {
       $inc: { stockQty: delta },
       $set: { 
-        notes: (product.notes || "") + `\n[${new Date().toISOString()}] Stock adjusted by ${delta}. Note: ${note || "N/A"}`.trim()
+        notes: (product.notes || "") + `\n[${new Date().toISOString()}] Stock adjusted by ${delta}. Note: ${note || "N/A"}`
       }
     },
     { new: true }
   );
   
   res.json({ ok: true, data: updatedProduct });
+});
+
+// DELETE /api/products/:id
+exports.deleteProduct = asyncHandler(async (req, res) => {
+  const product = await Product.findOneAndDelete({ _id: req.params.id, tenantId: req.user.tenantId });
+  if (!product) return res.status(404).json({ ok: false, error: "Product not found" });
+
+  res.json({ ok: true, data: { message: "Product deleted successfully" } });
 });

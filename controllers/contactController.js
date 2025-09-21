@@ -17,7 +17,7 @@ const contactUpsertSchema = Joi.object({
   email: Joi.string().trim().email({ tlds: { allow: false } }).allow("").optional(),
   address: Joi.string().trim().allow("").optional(),
   notes: Joi.string().trim().allow("").optional(),
-});
+}).unknown(true);
 
 const contactUpdateSchema = Joi.object({
     name: Joi.string().trim().allow(""),
@@ -146,7 +146,7 @@ exports.list = asyncHandler(async (req, res) => {
     const {
       stage, q, pipeline_status, isArchived,
       page = 1, limit = 20, sortBy, order = "desc",
-      from, to
+      from, to, assignedTo
     } = req.query;
 
     const filter = { tenantId: req.user.tenantId };
@@ -173,6 +173,13 @@ exports.list = asyncHandler(async (req, res) => {
         endDate.setHours(23, 59, 59, 999);
         filter.createdAt.$lte = endDate;
       }
+    }
+
+    // ✅ Apply AssignedTo filter
+    if (assignedTo === "unassigned") {
+      filter.assignedTo = null;
+    } else if (assignedTo) {
+      filter.assignedTo = assignedTo;
     }
     
     if (req.user.role === 'sales') {
@@ -274,11 +281,13 @@ exports.assignContact = asyncHandler(async (req, res) => {
     contact.assignedTo = userToAssign._id;
 
     contact.stageHistory.push({
-        from: `Assigned: ${previousAssignee}`,
-        to: `Assigned: ${userToAssign._id}`,
-        by: req.user.id,
-        note: `Manually assigned to ${userToAssign.name} by ${req.user.email || req.user.id}`
-    });
+  from: `Assigned: ${previousAssignee}`,
+  to: `Assigned: ${userToAssign._id}`,
+  by: req.user.id,
+  note: `Manually assigned to ${userToAssign.name} by ${req.user.email || req.user.id}`,
+  timestamp: new Date()
+});
+
 
     await contact.save();
     
@@ -309,7 +318,12 @@ exports.changeStage = asyncHandler(async (req, res) => {
 
   const prevStage = contact.stage;
   contact.stage = stage;
-  contact.stageHistory.push({ from: prevStage, to: stage, by: req.user.id });
+contact.stageHistory.push({
+  from: prevStage,
+  to: stage,
+  by: req.user.id,
+  timestamp: new Date()
+});
 
   if (stage === "sales" && contact.salesData?.pipeline_status === "won") {
     for (const item of contact.products) {

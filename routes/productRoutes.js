@@ -6,33 +6,21 @@ const auth = require("../middlewares/auth");
 router.use(auth);
 
 // GET all products (scoped by tenant)
-router.get("/", (req, res, next) => {
-  req.query.tenantId = req.user.tenantId;
-  controller.getProducts(req, res, next);
-});
+router.get("/", controller.getProducts);
 
 // GET one product
-router.get("/:id", (req, res, next) => {
-  req.query.tenantId = req.user.tenantId;
-  controller.getProduct(req, res, next);
-});
+router.get("/:id", controller.getProduct);
 
 // Create product
-router.post("/", (req, res, next) => {
-  req.body.tenantId = req.user.tenantId;
-  controller.createProduct(req, res, next);
-});
+router.post("/", controller.createProduct);
 
 // Update product
-router.patch("/:id", (req, res, next) => {
-  req.body.tenantId = req.user.tenantId;
-  controller.updateProduct(req, res, next);
-});
+router.patch("/:id", controller.updateProduct);
 
 // Adjust stock
-router.patch("/:id/stock", (req, res, next) => {
-  req.body.tenantId = req.user.tenantId;
-  controller.adjustStock(req, res, next);
-});
+router.patch("/:id/stock", controller.adjustStock);
+
+// Delete product
+router.delete("/:id", controller.deleteProduct);
 
 module.exports = router;

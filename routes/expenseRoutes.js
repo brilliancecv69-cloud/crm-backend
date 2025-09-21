@@ -7,7 +7,6 @@ router.use(auth);
 
 // Create expense
 router.post("/", (req, res, next) => {
-  req.body.tenantId = req.user.tenantId;
   expenseCtrl.create(req, res, next);
 });
 

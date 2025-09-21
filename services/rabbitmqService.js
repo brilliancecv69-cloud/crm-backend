@@ -1,103 +1,157 @@
-const amqp = require("amqplib");
+const amqp = require("amqp-connection-manager");
 const logger = require("../utils/logger");
-const Message = require("../models/Message");
-const Contact = require("../models/Contact");
-const Notification = require("../models/Notification");
 
+// --- إعدادات الطوابير والمتغيرات ---
 const RABBITMQ_URL = process.env.RABBITMQ_URL || "amqp://localhost:5672";
 const INCOMING_QUEUE = "whatsapp_incoming_messages";
+const OUTGOING_QUEUE = "whatsapp_outgoing_messages";
 
-let channel = null;
-let ioInstance = null;
+let connection;
+let channelWrapper;
+let ioInstance;
+let chatServiceInstance; // سيتم حقن النسخة الوحيدة من ChatService هنا
 
-async function connectRabbitMQ(io) {
+/**
+ * دالة التهيئة الرئيسية التي تتلقى الاعتماديات (Dependencies) من server.js
+ * @param {object} io - نسخة Socket.IO
+ * @param {object} chatService - النسخة الوحيدة من ChatService
+ */
+function connectRabbitMQ(io, chatService) {
+  if (connection) {
+    logger.info("[RabbitMQ] Connection already established.");
+    return;
+  }
+  
   ioInstance = io;
+  chatServiceInstance = chatService;
+
   try {
-    const connection = await amqp.connect(RABBITMQ_URL);
-    connection.on("error", (err) => logger.error("❌ RabbitMQ connection error", { err }));
-    connection.on("close", () => {
-      logger.error("❗️ RabbitMQ connection closed. Reconnecting...");
-      setTimeout(() => connectRabbitMQ(io), 5000);
+    connection = amqp.connect([RABBITMQ_URL]);
+
+    connection.on("connect", () => logger.info("✅ RabbitMQ Connected!"));
+    connection.on("disconnect", (err) => {
+        logger.error("❗️ RabbitMQ disconnected.", err);
     });
-    channel = await connection.createChannel();
-    await channel.assertQueue(INCOMING_QUEUE, { durable: true });
-    logger.info("✅ RabbitMQ Connected and queue is ready.");
-    
-    consumeIncomingMessages();
+
+    channelWrapper = connection.createChannel({
+      json: true,
+      setup: async (channel) => {
+        logger.info("[RabbitMQ] Setting up channel and queues...");
+        await channel.assertQueue(INCOMING_QUEUE, { durable: true });
+        await channel.assertQueue(OUTGOING_QUEUE, { durable: true });
+
+        // ✅ أهم تعديل: التحكم في عدد الرسائل لكل عامل
+        channel.prefetch(1);
+
+        // بدء تشغيل المستهلكين بعد إعداد القناة
+        consumeIncomingMessages(channel);
+        consumeOutgoingMessages(channel);
+      },
+    });
+
   } catch (err) {
-    logger.error("❌ Failed to connect to RabbitMQ", { err });
-    setTimeout(() => connectRabbitMQ(io), 5000);
+    logger.error("❌ Failed to initialize RabbitMQ connection", { err });
   }
 }
 
-function getChannel() { return channel; }
+/**
+ * يستهلك الرسائل الصادرة من الطابور ويرسلها عبر واتساب
+ * @param {object} channel - قناة RabbitMQ
+ */
+async function consumeOutgoingMessages(channel) {
+    logger.info("[RabbitMQ] 📤 Consumer for OUTGOING messages is running.");
+    await channel.consume(OUTGOING_QUEUE, async (msg) => {
+        if (!msg) return;
 
-async function consumeIncomingMessages() {
-  if (!channel || !ioInstance) return;
-  channel.prefetch(1);
+        try {
+            const task = JSON.parse(msg.content.toString());
+            const { tenantId, contactId, body, mediaInfo } = task;
 
-  channel.consume(INCOMING_QUEUE, async (msg) => {
-    if (msg === null) return;
-    try {
-      const data = JSON.parse(msg.content.toString());
-      
-      // --- ✅ START: CORRECTION ---
-      // Destructure 'type' with 'let' to allow modification, and others with 'const'.
-      const { tenantId, from, to, direction, body, meta, createdAt } = data;
-      let { type } = data;
-      // --- ✅ END: CORRECTION ---
+            if (!tenantId || !contactId || (!body && !mediaInfo)) {
+                logger.error("[RabbitMQ] Invalid outgoing task, missing required content (body or media).", task);
+                return channel.ack(msg); // إزالة الرسالة غير الصالحة
+            }
 
-      const waMessageId = data.waMessageId || meta?.waMessageId;
-
-      if (!tenantId || !waMessageId) {
-        logger.warn("[RabbitMQ] Message missing tenantId or waMessageId, skipping.", { data });
-        return channel.ack(msg);
-      }
-      
-      // Now this reassignment is valid because 'type' was declared with 'let'.
-      if (type === 'chat') {
-        type = 'text';
-      }
-
-      const contactPhone = (direction === 'out' ? to : from).replace('@c.us', '');
-      const contact = await Contact.findOneAndUpdate(
-        { phone: contactPhone, tenantId },
-        { $setOnInsert: { phone: contactPhone, tenantId, name: contactPhone, stage: "lead" } },
-        { upsert: true, new: true }
-      );
-
-      // Prevent saving empty text messages
-      if (type === 'text' && (!body || !body.trim())) {
-        return channel.ack(msg);
-      }
-      
-      const messagePayload = {
-        tenantId,
-        contactId: contact._id,
-        direction,
-        type,
-        body: body || '',
-        meta: { ...meta, waMessageId }, // Ensure waMessageId is always in meta
-        createdAt: createdAt ? new Date(createdAt) : new Date(),
-      };
-      
-      const savedMessage = await Message.findOneAndUpdate(
-        { tenantId, "meta.waMessageId": waMessageId },
-        { $set: messagePayload },
-        { upsert: true, new: true, runValidators: true }
-      );
-
-      ioInstance.to(`tenant:${tenantId}`).emit("msg:new", savedMessage.toObject());
-      logger.info(`[RabbitMQ] 💬 Processed message for ${contact.phone} with type ${type}`);
-      
-      channel.ack(msg);
-    } catch (err) {
-      logger.error("❌ [RabbitMQ] Error consuming message", { error: err.message, stack: err.stack });
-      channel.nack(msg, false, false); // Acknowledge with requeue=false to avoid infinite loops on bad messages
-    }
-  });
-
-  logger.info("[RabbitMQ] Consumer is ready and waiting for messages.");
+            await chatServiceInstance.handleOutgoingMessage(tenantId, contactId, body, mediaInfo);
+            
+            logger.info(`[RabbitMQ] ✅ Successfully processed outgoing message for contact ${contactId}`);
+            channel.ack(msg);
+        } catch (err) {
+            logger.error("❌ [RabbitMQ] Error sending outgoing message. Re-queueing.", { error: err.message });
+            // ✅ إرجاع الرسالة للطابور بدون ضياع
+            channel.nack(msg, false, true);
+        }
+    }, { noAck: false });
 }
 
-module.exports = { connectRabbitMQ, getChannel };
+/**
+ * يستهلك الرسائل الواردة ويعالجها
+ * @param {object} channel - قناة RabbitMQ
+ */
+async function consumeIncomingMessages(channel) {
+    const Message = require("../models/Message");
+    const Contact = require("../models/Contact");
+
+    logger.info("[RabbitMQ] 📥 Consumer for INCOMING messages is running.");
+    await channel.consume(INCOMING_QUEUE, async (msg) => {
+        if (!msg) return;
+        
+        try {
+            const data = JSON.parse(msg.content.toString());
+            const { tenantId, from, direction, body, meta } = data;
+            const waMessageId = meta?.waMessageId;
+
+            if (!tenantId || !waMessageId) {
+                logger.warn("[RabbitMQ] Incoming message missing tenantId or waMessageId.", { waMessageId });
+                return channel.ack(msg);
+            }
+
+            const contactPhone = (direction === 'out' ? data.to : from).replace('@c.us', '');
+            const contact = await Contact.findOneAndUpdate(
+                { phone: contactPhone, tenantId },
+                { $setOnInsert: { name: meta.notifyName || contactPhone, phone: contactPhone, tenantId } },
+                { upsert: true, new: true }
+            );
+
+            const messagePayload = {
+                tenantId,
+                contactId: contact._id,
+                direction,
+                type: data.type === 'chat' ? 'text' : data.type,
+                body: body || '',
+                meta: { waMessageId },
+                createdAt: new Date(data.createdAt),
+            };
+
+            const savedMessage = await Message.findOneAndUpdate(
+                { tenantId, "meta.waMessageId": waMessageId },
+                { $set: messagePayload },
+                { upsert: true, new: true }
+            );
+
+            ioInstance.to(`tenant:${tenantId}`).emit("msg:new", savedMessage.toObject());
+            channel.ack(msg);
+        } catch (err) {
+            logger.error("❌ [RabbitMQ] Error processing incoming message.", { error: err.message });
+            // ✅ هنا بنستخدم nack مع requeue=false → الرسائل اللي بتعمل crash متتكررش بلا نهاية
+            channel.nack(msg, false, false);
+        }
+    }, { noAck: false });
+}
+
+/**
+ * دالة مساعدة لنشر الرسائل إلى طابور الإرسال
+ * @param {object} payload - محتوى الرسالة المراد إرسالها
+ */
+async function publishToOutgoingQueue(payload) {
+    if (!channelWrapper) {
+        throw new Error("RabbitMQ channel is not available.");
+    }
+    await channelWrapper.sendToQueue(OUTGOING_QUEUE, payload, { persistent: true });
+    logger.info(`[RabbitMQ] 📤 Message for contact ${payload.contactId} queued for sending.`);
+}
+
+module.exports = {
+    connectRabbitMQ,
+    publishToOutgoingQueue
+};

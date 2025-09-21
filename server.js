@@ -39,6 +39,7 @@ const shippingRoutes = require('./routes/shippingRoutes');
 const leadRoutes = require("./routes/leadRoutes");
 
 const app = express();
+app.set('trust proxy', 1); 
 const server = http.createServer(app);
 
 // =====================
@@ -276,8 +277,7 @@ const onlineUsers = new Map();
 async function startServer() {
   try {
     await connectDB(process.env.MONGO_URI);
-    await connectRabbitMQ(io);
-
+    await connectRabbitMQ(io, chatService);
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
       logger.info(`🚀 API Server is live on port ${PORT} in ${process.env.NODE_ENV} mode.`);

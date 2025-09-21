@@ -73,7 +73,7 @@ const contactSchema = new mongoose.Schema({
   salesData: {
     pipeline_status: {
         type: String,
-        enum: ['new', 'negotiation', 'won', 'lost', null],
+        enum: ['new', 'negotiation', "proposal",'won', 'lost', null],
         default: 'new'
     },
     amount: {

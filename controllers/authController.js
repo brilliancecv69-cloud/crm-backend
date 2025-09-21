@@ -4,6 +4,7 @@ const Joi = require("joi");
 const User = require("../models/User");
 const Tenant = require("../models/Tenant");
 const asyncHandler = require("../middlewares/asyncHandler");
+const WhatsAppAccount = require("../models/WhatsAppAccount");
 
 const registerSchema = Joi.object({
   name: Joi.string().min(2).required(),
@@ -20,10 +21,12 @@ const loginSchema = Joi.object({
 
 const generateToken = (user) =>
   jwt.sign(
-    { 
-      id: user._id, 
-      role: user.role, 
-      tenantId: user.tenantId._id ? user.tenantId._id.toString() : user.tenantId.toString() 
+    {
+      id: user._id,
+      role: user.role,
+      tenantId: user.tenantId._id
+        ? user.tenantId._id.toString()
+        : user.tenantId.toString(),
     },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
@@ -33,7 +36,8 @@ exports.register = asyncHandler(async (req, res) => {
   const data = await registerSchema.validateAsync(req.body);
 
   const exists = await User.findOne({ email: data.email });
-  if (exists) return res.status(400).json({ ok: false, error: "Email already in use" });
+  if (exists)
+    return res.status(400).json({ ok: false, error: "Email already in use" });
 
   const user = await User.create(data);
 
@@ -53,23 +57,51 @@ exports.register = asyncHandler(async (req, res) => {
 exports.login = asyncHandler(async (req, res) => {
   const { email, password } = await loginSchema.validateAsync(req.body);
 
-  const user = await User.findOne({ email }).select("+password").populate("tenantId");
+  const user = await User.findOne({ email })
+    .select("+password")
+    .populate("tenantId");
   if (!user) {
     return res.status(401).json({ ok: false, error: "Invalid credentials" });
   }
 
   if (!user.isActive) {
-    return res.status(403).json({ ok: false, error: "Your account is disabled. Please contact your administrator." });
+    return res
+      .status(403)
+      .json({
+        ok: false,
+        error: "Your account is disabled. Please contact your administrator.",
+      });
   }
 
   if (!user.tenantId || !user.tenantId.isActive) {
-    return res.status(403).json({ ok: false, error: "Your company's account is suspended." });
+    return res
+      .status(403)
+      .json({ ok: false, error: "Your company's account is suspended." });
   }
 
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
     return res.status(401).json({ ok: false, error: "Invalid credentials" });
   }
+
+  // ✅ --- START: الكود المصحح والنهائي ---
+  if (user.tenantId && user.tenantId._id) {
+    const tenantId = user.tenantId._id;
+    let waAccount = await WhatsAppAccount.findOne({ tenantId });
+    if (!waAccount) {
+      await WhatsAppAccount.create({
+        name: `Default WA - ${user.tenantId.name || tenantId}`,
+        tenantId: tenantId,
+        isActive: true,
+        // ✅ **هذا هو السطر الذي تم إصلاحه وإضافته**
+        sessionName: `wa-session-${tenantId.toString()}`,
+      });
+      console.log(
+        `[AuthLogin] Created placeholder WhatsAppAccount for tenant ${tenantId}`
+      );
+    }
+  }
+  // ✅ --- END: الكود المصحح والنهائي ---
 
   res.json({
     ok: true,
@@ -85,10 +117,14 @@ exports.login = asyncHandler(async (req, res) => {
 });
 
 exports.me = asyncHandler(async (req, res) => {
-  if (!req.user?.id) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  if (!req.user?.id)
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
 
-  const user = await User.findById(req.user.id).select("_id name email role tenantId createdAt");
-  if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+  const user = await User.findById(req.user.id).select(
+    "_id name email role tenantId createdAt"
+  );
+  if (!user)
+    return res.status(404).json({ ok: false, error: "User not found" });
 
   res.json({ ok: true, data: user });
 });
@@ -100,11 +136,14 @@ exports.resetPassword = asyncHandler(async (req, res) => {
 
   const { newPassword } = req.body;
   if (!newPassword || newPassword.length < 6) {
-    return res.status(400).json({ ok: false, error: "Password must be at least 6 chars" });
+    return res
+      .status(400)
+      .json({ ok: false, error: "Password must be at least 6 chars" });
   }
 
   const user = await User.findById(req.params.id).select("+password");
-  if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+  if (!user)
+    return res.status(404).json({ ok: false, error: "User not found" });
 
   await user.setPassword(newPassword);
 
@@ -112,46 +151,38 @@ exports.resetPassword = asyncHandler(async (req, res) => {
 });
 
 exports.getTenantSettings = asyncHandler(async (req, res) => {
-    const tenant = await Tenant.findById(req.user.tenantId).select('settings');
-    if (!tenant) {
-        res.status(404);
-        throw new Error("Tenant not found");
-    }
-    res.json({ ok: true, data: tenant });
+  const tenant = await Tenant.findById(req.user.tenantId).select("settings");
+  if (!tenant) {
+    res.status(404);
+    throw new Error("Tenant not found");
+  }
+  res.json({ ok: true, data: tenant });
 });
 
 exports.updateTenantSettings = asyncHandler(async (req, res) => {
-    const { settings } = req.body;
-    
-    const tenant = await Tenant.findByIdAndUpdate(
-        req.user.tenantId,
-        { $set: { settings: settings } },
-        { new: true, runValidators: true }
-    ).select('settings');
+  const { settings } = req.body;
 
-    if (!tenant) {
-        res.status(404);
-        throw new Error("Tenant not found");
-    }
+  const tenant = await Tenant.findByIdAndUpdate(
+    req.user.tenantId,
+    { $set: { settings: settings } },
+    { new: true, runValidators: true }
+  ).select("settings");
 
-    res.json({ ok: true, data: tenant });
+  if (!tenant) {
+    res.status(404);
+    throw new Error("Tenant not found");
+  }
+
+  res.json({ ok: true, data: tenant });
 });
 
-// --- ✅ START: NEW FUNCTION TO GET USERS ---
-/**
- * @desc    Get users for the current tenant
- * @route   GET /api/auth/users
- * @access  Admin
- */
 exports.getUsers = asyncHandler(async (req, res) => {
-    const filter = { tenantId: req.user.tenantId };
-    
-    // Allow filtering by role, e.g., /api/auth/users?role=sales
-    if (req.query.role) {
-        filter.role = req.query.role;
-    }
+  const filter = { tenantId: req.user.tenantId };
 
-    const users = await User.find(filter).select('-password'); // Exclude password from results
-    res.json({ ok: true, data: users });
+  if (req.query.role) {
+    filter.role = req.query.role;
+  }
+
+  const users = await User.find(filter).select("-password");
+  res.json({ ok: true, data: users });
 });
-// --- ✅ END: NEW FUNCTION TO GET USERS ---
